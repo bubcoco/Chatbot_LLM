@@ -1,0 +1,62 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      db:
+        image: pgvector/pgvector:0.8.0-pg17
+        env:
+          POSTGRES_USER: supportkit
+          POSTGRES_PASSWORD: supportkit-dev
+          POSTGRES_DB: supportkit
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U supportkit -d supportkit"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgresql://supportkit:supportkit-dev@localhost:5432/supportkit
+      LANGGRAPH_STRICT_MSGPACK: "true"
+      SUPPORTKIT_MODEL: "fake:rules"
+      SUPPORTKIT_DEMO_MODE: "false"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install uv
+          python -m uv sync --frozen
+      - name: Lint
+        run: .venv/bin/ruff check src tests db seed evals ui
+      - name: Migrate and seed
+        run: |
+          .venv/bin/supportkit migrate
+          .venv/bin/supportkit seed
+      - name: Tests (must not skip DB tests)
+        shell: bash
+        run: |
+          set -o pipefail
+          .venv/bin/python -m pytest -q -rs | tee pytest.out
+          if grep -q "^SKIPPED" pytest.out; then echo "::error::tests were skipped (DB or seed missing)"; exit 1; fi
+      - name: thai_text coverage (must be 100%)
+        run: .venv/bin/python -m pytest -q tests/test_thai_text.py --cov=supportkit.core.thai_text --cov-branch --cov-fail-under=100
+      - name: Evals (fake model, free)
+        run: .venv/bin/supportkit eval --model fake:rules --require-all
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: evals/reports/
+          if-no-files-found: ignore

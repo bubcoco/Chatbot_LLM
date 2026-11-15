@@ -1,0 +1,29 @@
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-supportkit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supportkit-dev}
+      POSTGRES_DB: ${POSTGRES_DB:-supportkit}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot migration step: Alembic (our tables) + LangGraph checkpointer/store setup().
+  migrate:
+    build: .
+    command: ["supportkit", "migrate"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-supportkit}:${POSTGRES_PASSWORD:-supportkit-dev}@db:5432/${POSTGRES_DB:-supportkit}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
